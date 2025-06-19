@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: master-thesis-flask-backend
+    env: python
+    buildCommand: ""
+    startCommand: python app.py
+    envVars:
+      - key: MONGO_URI
+        value: your-mongo-uri-here
