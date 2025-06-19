@@ -1,0 +1,29 @@
+name: master_thesis_backend_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - flask
+      - fastapi
+      - uvicorn
+      - sqlalchemy
+      - psycopg2-binary
+      - pydantic
+      - alembic
+      - python-dotenv
+      - httpx
+      - pytest
+      - pytest-asyncio
+      - pytest-cov
+      - coverage
+      - pre-commit
+      - pymongo
+      - requests
+      - numpy
+      - pandas
+      - scikit-learn
+      - matplotlib
+
