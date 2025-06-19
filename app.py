@@ -2,8 +2,11 @@ from flask import Flask, jsonify, render_template, request
 from config import db
 from basicAnalysis import run_basic_analysis
 from overloadAnalysis import run_overload_analysis
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
+
 
 @app.route('/')
 def index():
@@ -40,5 +43,3 @@ def run_overload():
         print(error_message)
         return jsonify({"error": error_message}), 500
 
-if __name__ == '__main__':
-    app.run(debug=True)
