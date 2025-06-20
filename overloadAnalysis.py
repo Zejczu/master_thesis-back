@@ -4,29 +4,26 @@ from datetime import datetime, timezone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
 import pandas as pd
 
-def run_overload_analysis(horse_id: str = None) -> dict:
-    """
-    Przeprowadza analizę przeciążenia konia na podstawie danych treningowych.
-    Zapisuje wyniki do kolekcji 'overloadanalyses' w MongoDB.
-    """
+def is_overloaded_by_rules(row):
+    conditions = [
+        row["hr_after"] >= 150,
+        row["hr_after"] - row["hr_during"] >= -10,
+        row["duration"] >= 60 and row["intensity"] in ["Medium", "High"],
+        row["temperature"] >= 30 and row["hr_after"] >= 140
+    ]
+    return int(any(conditions))
+
+def run_overload_analysis(horse_id: str) -> dict:
     if not horse_id:
         raise ValueError("Musisz podać horse_id")
 
-    try:
-        query = {
-            "trainings": {"$exists": True, "$ne": []},
-            "horseId": ObjectId(horse_id)
-        }
-        sessions = list(db.sessions.find(query))
-    except Exception as e:
-        print(f"Błąd podczas pobierania danych z MongoDB: {e}")
-        return {}
-
-    print(f"[INFO] Znaleziono {len(sessions)} sesji treningowych dla horseId: {horse_id}")
-
+    query = {
+        "trainings": {"$exists": True, "$ne": []},
+        "horseId": ObjectId(horse_id)
+    }
+    sessions = list(db.sessions.find(query))
     if not sessions:
         return {}
 
@@ -49,42 +46,40 @@ def run_overload_analysis(horse_id: str = None) -> dict:
                 "ratingScore": training.get("ratingScore"),
             })
 
-    if len(data) < 5:
-        print("[INFO] Zbyt mało danych treningowych do przeprowadzenia analizy przeciążenia.")
-        return {}
-
     df = pd.DataFrame(data)
+    df.dropna(subset=["hr_before", "hr_during", "hr_after", "temperature", "duration", "intensity"], inplace=True)
 
-    df["overloaded"] = df["ratingScore"].apply(lambda x: 1 if x is not None and x <= 2 else 0)
-    df.dropna(subset=["hr_before", "hr_during", "hr_after", "temperature", "duration"], inplace=True)
+    # Reguły
+    df["overloaded_rule"] = df.apply(is_overloaded_by_rules, axis=1)
 
-    features = df.drop(columns=["ratingScore", "overloaded"])
+    # ML: przygotowanie
+    df["label"] = df["ratingScore"].apply(lambda x: 1 if x is not None and x <= 2 else 0)
+    features = df.drop(columns=["ratingScore", "label", "overloaded_rule"])
     for col in features.select_dtypes(include=["object"]).columns:
         features[col] = LabelEncoder().fit_transform(features[col].astype(str))
 
-    X = features
-    y = df["overloaded"]
-
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-
+    X_train, X_test, y_train, y_test = train_test_split(features, df["label"], test_size=0.25, random_state=42)
     model = RandomForestClassifier(n_estimators=100, random_state=42)
     model.fit(X_train, y_train)
 
-    y_pred = model.predict(X_test)
-    report = classification_report(y_test, y_pred, output_dict=True)
+    df["ml_prediction"] = model.predict(features)
 
-    df["predictedOverload"] = model.predict(X)
+    # Hybryda
+    def final_overload(row):
+        if row["overloaded_rule"] == 1:
+            return 1
+        elif row["ml_prediction"] == 1:
+            return 1
+        else:
+            return 0
+
+    df["final_overloaded"] = df.apply(final_overload, axis=1)
 
     overload_stats = {
         "total": len(df),
-        "predictedOverloaded": int(df["predictedOverload"].sum()),
-        "predictedOk": int(len(df) - df["predictedOverload"].sum()),
-        "accuracy": round(report["accuracy"], 2),
-        "precision": round(report["1"]["precision"], 2) if "1" in report else None,
-        "recall": round(report["1"]["recall"], 2) if "1" in report else None,
+        "overloaded": int(df["final_overloaded"].sum()),
+        "ok": int(len(df) - df["final_overloaded"].sum())
     }
-
-    detailed_results = df.to_dict(orient="records")
 
     try:
         db.overloadanalyses.update_one(
@@ -99,7 +94,7 @@ def run_overload_analysis(horse_id: str = None) -> dict:
                     "analysisType": "overload",
                     "generatedAt": datetime.now(timezone.utc),
                     "stats": overload_stats,
-                    "details": detailed_results
+                    "details": df.to_dict(orient="records")
                 }
             },
             upsert=True
@@ -110,10 +105,8 @@ def run_overload_analysis(horse_id: str = None) -> dict:
 
     print(f"[INFO] Overload analysis zakończona dla horseId: {horse_id}")
     print(overload_stats)
-
     return overload_stats
 
 if __name__ == "__main__":
-    # Przykład wywołania testowego:
-    # run_overload_analysis("66e951701582b84c167f1648")
+    # run_overload_analysis("66e94fde1582b84c167f1633")
     pass
